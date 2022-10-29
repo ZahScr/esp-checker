@@ -5,35 +5,36 @@ import requests
 import pandas as pd
 import json
 
-# --- test
-# import smtplib
-# from email.mime.text import MIMEText
-# from email.mime.application import MIMEApplication
-# from email.mime.multipart import MIMEMultipart
-
-# logging.basicConfig(level=logging.DEBUG)
 
 # CONFIG ---------------------
-selected_search_type = "nie"
+# selected_search_type = "passport"
 selected_months_look_ahead = 6
 selected_start_date = date.today()
 # ----------------------------
 
-callback_dict = {
+appointment_dict = {
     "nie": {
         "callback_key": "21108772810824730861_1666730773119",
         "agenda_key": "bkt215127",
         "service_key": "bkt532048",
     },
-    "residence": {
+    "residence_doc": {
         "callback_key": "21108772810824730861_1666730773119",
         "agenda_key": "bkt215127",
         "service_key": "bkt532103",
     },
+    "passport": {
+        "callback_key": "21109829920575219404_1666802385628",
+        "agenda_key": "bkt215292",
+        "service_key": "bkt532004",
+    },
 }
 
 
-def build_month_list(start_date, months_look_ahead):
+def build_month_list(start_date=date.today(), months_look_ahead=3):
+    # Don't look more than 1 year ahead.
+    months_look_ahead = months_look_ahead if months_look_ahead <= 12 else 12
+
     time_delta = timedelta(weeks=months_look_ahead * 4)
     end_date = date.today() + time_delta
 
@@ -74,10 +75,10 @@ def build_month_list(start_date, months_look_ahead):
 
 
 def get_time_slots_for_range(range_start_date, range_end_date, search_type):
-    callback_code = callback_dict[search_type]["callback_key"]
+    callback_code = appointment_dict[search_type]["callback_key"]
     public_key = "28dbd7e6e06b2996c84fa53fbe52091e7"
-    agenda_key = callback_dict[search_type]["agenda_key"]
-    service_key = callback_dict[search_type]["service_key"]
+    agenda_key = appointment_dict[search_type]["agenda_key"]
+    service_key = appointment_dict[search_type]["service_key"]
     low_dash_num = "1666730773124"
     base_url = f"https://www.citaconsular.es/onlinebookings/datetime/?callback=jQuery{callback_code}&type=default&publickey={public_key}&lang=es&services%5B%5D={service_key}&agendas%5B%5D={agenda_key}&version=1243&src=https%3A%2F%2Fwww.citaconsular.es%2Fes%2Fhosteds%2Fwidgetdefault%2F28dbd7e6e06b2996c84fa53fbe52091e7%23services&srvsrc=https%3A%2F%2Fcitaconsular.es&start={range_start_date}&end={range_end_date}&selectedPeople=1&_={low_dash_num}"
 
@@ -142,45 +143,65 @@ def process_time_slots_days(time_slot_days):
     return available_time_slots
 
 
+def find_appointments_for_key(months, appointment_key):
+    all_available_time_slots = []
+
+    for month in months:
+        range_start_date = "-".join(
+            [str(month["year"]), str(month["month"]), str(month["first_day_of_month"])]
+        )
+        range_end_date = "-".join(
+            [str(month["year"]), str(month["month"]), str(month["last_day_of_month"])]
+        )
+
+        time_slot_days, max_available_days = get_time_slots_for_range(
+            range_start_date,
+            range_end_date,
+            search_type=appointment_key,
+        )
+
+        month_available_time_slots = process_time_slots_days(
+            time_slot_days=time_slot_days
+        )
+
+        if len(month_available_time_slots):
+            for slot in month_available_time_slots:
+                all_available_time_slots.append(slot)
+
+        time.sleep(1)
+
+    if len(all_available_time_slots):
+        print(
+            f"Found {len(all_available_time_slots)} available {appointment_key} time slots!"
+        )
+    else:
+        print(f"No {appointment_key} time slots found :(")
+
+    return all_available_time_slots
+
+
 def send_email(receiver, subject, data_df):
     print(f"Test - receiver: {receiver}, subject: {subject}")
 
 
-months = build_month_list(selected_start_date, selected_months_look_ahead)
+## ------------------ Check all appointment types ------------------
 
-all_available_time_slots = []
+all_appointments_df = pd.DataFrame(
+    [],
+    columns=["appointment_type", "agenda", "date", "state", "time_slot_id", "time"],
+)
+month_list = build_month_list(selected_start_date, selected_months_look_ahead)
 
-for month in months:
-    range_start_date = "-".join(
-        [str(month["year"]), str(month["month"]), str(month["first_day_of_month"])]
-    )
-    range_end_date = "-".join(
-        [str(month["year"]), str(month["month"]), str(month["last_day_of_month"])]
-    )
+for appointment_type in appointment_dict.keys():
+    appointments = find_appointments_for_key(month_list, appointment_type)
 
-    time_slot_days, max_available_days = get_time_slots_for_range(
-        range_start_date,
-        range_end_date,
-        search_type=selected_search_type,
-    )
+    if len(appointments):
+        df = pd.DataFrame(
+            appointments,
+            columns=["agenda", "date", "state", "time_slot_id", "time"],
+        )
+        df.insert(0, "appointment_type", appointment_type)
 
-    month_available_time_slots = process_time_slots_days(time_slot_days=time_slot_days)
+        all_appointments_df = pd.concat([all_appointments_df, df])
 
-    if len(month_available_time_slots):
-        for slot in month_available_time_slots:
-            all_available_time_slots.append(slot)
-
-    time.sleep(1.5)
-
-if len(all_available_time_slots):
-    print(
-        f"found {len(all_available_time_slots)} available {selected_search_type} time slots!"
-    )
-
-    df = pd.DataFrame(
-        all_available_time_slots,
-        columns=["agenda", "date", "state", "time_slot_id", "time"],
-    )
-    print(df)
-else:
-    print(f"No {selected_search_type} time slots found :(")
+print(all_appointments_df)
